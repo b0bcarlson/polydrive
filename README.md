@@ -9,5 +9,5 @@ Tested only with geojson from [BBBike](https://extract.bbbike.org/).
 
 Future:
  - Automatic downloading of geojson based on an input geotif (or similar).
- - Cutting of the input geojson based on the created polygons.
+ - Cutting of the input geotif based on the created polygons.
  - Storage of polygons to a database.

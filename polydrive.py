@@ -3,15 +3,36 @@ import sys
 
 import geojson
 import pyproj
+import os
+import osr
+import rasterio
+from rasterio.mask import mask
+from osgeo import gdal
 from pyproj import Proj
 from shapely.geometry import mapping, LineString
 from shapely.ops import transform
 
-WIDTH = 1.85 #Standard constant width for lanes. This is the width of highway lanes in the US (12 ft/2).
+def usage():
+	return "Usage: python " + sys.argv[0] + " [input geogjson] [output name] [input geotif]"
+if len(sys.argv) != 4:
+	print usage()
+	exit(1)
+inputGeojson = sys.argv[1]
+outputName = sys.argv[2]
+inputTif = sys.argv[3]
+
+os.system("mkdir " + outputName)
+dataset = gdal.Open(inputTif)
+if osr.SpatialReference(wkt=dataset.GetProjection()).GetAttrValue('AUTHORITY',1) != "4326":
+	print("Input not in correct projection, reprojecting now")
+	gdal.Warp(outputName+"/"+inputTif, inputTif, format='GTiff', dstSRS='EPSG:4326')
+	inputTif = outputName+"/"+inputTif
+
+WIDTH = 2 #Standard constant width for lanes. This is the width of highway lanes in the US (12 ft/2).
 #Eventually may split this more based on road type
 
-inGeo = geojson.load(file(sys.argv[1])) #input file
-in_crs = Proj(init='epsg:4326') #OSM epsg
+inGeo = geojson.load(file(inputGeojson))
+osm_projection = Proj(init='epsg:4326')
 attrs = ["highway", "width", "lanes", "name", "oneway", "surface", "destination:ref", "destination:street", "ref", "layer", "bridge"]
 
 def featFilter(x):
@@ -54,11 +75,11 @@ for g in inGeo:
 	#Here I am storing Transformers based on the lat/long so less need to be created and it's faster
 	if (y, x) not in transformations.keys():
 		project = pyproj.Transformer.from_proj(
-			in_crs,
+			osm_projection,
 			trans_crs)
 		project2 = pyproj.Transformer.from_proj(
 			trans_crs,
-			in_crs)
+			osm_projection)
 		transformations[(y, x)] = (project, project2)
 	else:
 		project = transformations[(y, x)][0]
@@ -98,15 +119,35 @@ for k in sorted(polys):
 def polyMap(x):
 	#Convert the shapely shape to a geojson shape
 	result = {}
-	result["type"] = x.type
+	result["type"] = "Feature"
 	result["geometry"] = mapping(x)
+	result["properties"] = {}
 	for a in attrs:
 		try:
-			result[a] = getattr(x, a)
+			result["properties"][a] = getattr(x, a)
 		except AttributeError, e:
 			pass
 	return result
 
 gjs = { "type": "FeatureCollection", "features": map(polyMap, finalized_polys) }
-with open(sys.argv[2], "w") as out:
+with open(outputName + "/" + outputName + ".geojson", "w") as out:
 	geojson.dump(gjs, out)
+
+with rasterio.open(inputTif) as inTif:
+	out_meta = inTif.meta
+	out_image, out_transform = rasterio.mask.mask(inTif, finalized_polys, crop=True)
+	out_meta.update({"driver": "GTiff",
+					 "height": out_image.shape[1],
+					 "width": out_image.shape[2],
+					 "transform": out_transform})
+	with rasterio.open(outputName + "/" + outputName + ".tif", "w", **out_meta) as dest:
+		dest.write(out_image)
+
+	for k, v in enumerate(finalized_polys):
+		out_image, out_transform = rasterio.mask.mask(inTif, [v], crop=True)
+		out_meta.update({"driver": "GTiff",
+						 "height": out_image.shape[1],
+						 "width": out_image.shape[2],
+						 "transform": out_transform})
+		with rasterio.open(outputName + "/" + str(k) + ".tif", "w", **out_meta) as dest:
+			dest.write(out_image)
